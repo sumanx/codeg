@@ -77,18 +77,19 @@ describe("VirtualizedMessageThread focus origin", () => {
     expect(viewport).not.toHaveAttribute("data-focus-origin")
   })
 
-  it("clears the pointer marker on keyboard input so the ring returns", () => {
+  it("keeps the pointer marker through keyboard input so no ring appears", () => {
     renderThread()
     const viewport = screen.getByTestId("viewport")
 
     pointerDown(screen.getByTestId("content"), 0)
     expect(viewport).toHaveAttribute("data-focus-origin", "pointer")
 
-    // Switching to keyboard scrolling drops the marker, so the suppressing
-    // `data-[focus-origin=pointer]` selector no longer matches and the
-    // keyboard focus ring becomes visible again.
+    // Any key press makes the browser match :focus-visible; the marker must
+    // survive it, or Esc (or keyboard scrolling) after a click would ring the
+    // whole transcript.
+    keyDown(viewport, "Escape")
     keyDown(viewport, "ArrowDown")
-    expect(viewport).not.toHaveAttribute("data-focus-origin")
+    expect(viewport).toHaveAttribute("data-focus-origin", "pointer")
     expect(document.activeElement).toBe(viewport)
   })
 
