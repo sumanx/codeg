@@ -229,7 +229,9 @@ function VirtualizedMessageThreadImpl<T>({
     const el = scrollRef.current
     if (!el) return
     el.tabIndex = 0
+    let blurCheck: number | undefined
     const clearPointerFocus = () => {
+      window.clearTimeout(blurCheck)
       el.removeAttribute("data-focus-origin")
     }
     const onPointerDown = (e: PointerEvent) => {
@@ -249,16 +251,28 @@ function VirtualizedMessageThreadImpl<T>({
       el.setAttribute("data-focus-origin", "pointer")
       el.focus({ preventScroll: true })
     }
+    // The pointer-origin marker holds until focus really leaves the viewport,
+    // so a clicked transcript never grows the ring — not even once a key is
+    // pressed (pressing any key makes the browser match :focus-visible, so
+    // clearing the marker on keydown put a ring around the whole transcript on
+    // a mere Esc). Tabbing in still shows the ring: that focus never sets it.
+    //
+    // A blur alone isn't "really leaves": the whole window losing focus (switch
+    // apps, then resize the window to come back) blurs the viewport too, yet it
+    // stays the document's active element and the browser re-focuses it on the
+    // way back — without the marker, the ring appeared on return. So look after
+    // the blur settles: only a viewport that is no longer active drops it.
+    const onBlur = () => {
+      window.clearTimeout(blurCheck)
+      blurCheck = window.setTimeout(() => {
+        if (document.activeElement !== el) clearPointerFocus()
+      })
+    }
     el.addEventListener("pointerdown", onPointerDown)
-    // The pointer-origin marker holds until the viewport loses focus, so a
-    // clicked transcript never grows the ring — not even once a key is pressed
-    // (pressing any key makes the browser match :focus-visible, so clearing
-    // the marker on keydown put a ring around the whole transcript on a mere
-    // Esc). Tabbing in still shows the ring: that focus never sets the marker.
-    el.addEventListener("blur", clearPointerFocus)
+    el.addEventListener("blur", onBlur)
     return () => {
       el.removeEventListener("pointerdown", onPointerDown)
-      el.removeEventListener("blur", clearPointerFocus)
+      el.removeEventListener("blur", onBlur)
       clearPointerFocus()
     }
   }, [scrollRef])
