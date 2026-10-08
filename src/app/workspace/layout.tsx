@@ -779,6 +779,15 @@ function FolderWorkspaceShell({ children }: { children: React.ReactNode }) {
 
   const [shellWidth, setShellWidth] = useState(0)
   const [mainHeight, setMainHeight] = useState(0)
+  // The panels split the width LEFT OVER by the dividers, not the container's:
+  // an open divider is a fixed 1px flex item (a closed one is `w-0`), and the
+  // panels' percentages are shares of the remainder. Converting px <-> percent
+  // against the full container width left the side columns up to a pixel off
+  // their requested width, by an amount that changes with every window width —
+  // the divider crept sub-pixel on each resize step.
+  const shellHandlesWidth = (sidebarOpen ? 1 : 0) + (auxOpen ? 1 : 0)
+  const shellPanelsWidth =
+    shellWidth > 0 ? Math.max(1, shellWidth - shellHandlesWidth) : 0
 
   const shellDesiredLayoutRef = useRef<[number, number, number]>([0, 100, 0])
   const shellAppliedLayoutRef = useRef<[number, number, number] | null>(null)
@@ -847,7 +856,9 @@ function FolderWorkspaceShell({ children }: { children: React.ReactNode }) {
     }
   }, [])
 
-  const buildShellLayout = useCallback((): [number, number, number] => {
+  // The side columns' widths in px: the requested widths, scaled down together
+  // when the window is too narrow to also leave MIN_CENTER_WIDTH_PX between.
+  const shellSides = useMemo(() => {
     const requestedLeft = sidebarOpen
       ? clamp(sidebarWidth, sidebarMinWidth, sidebarMaxWidth)
       : 0
@@ -856,7 +867,9 @@ function FolderWorkspaceShell({ children }: { children: React.ReactNode }) {
       : 0
 
     const totalWidth =
-      shellWidth > 0 ? shellWidth : requestedLeft + requestedRight + 960
+      shellPanelsWidth > 0
+        ? shellPanelsWidth
+        : requestedLeft + requestedRight + 960
 
     let left = requestedLeft
     let right = requestedRight
@@ -869,21 +882,46 @@ function FolderWorkspaceShell({ children }: { children: React.ReactNode }) {
       right *= scale
     }
 
-    const center = Math.max(1, totalWidth - left - right)
-    const total = left + center + right
-
-    return [(left / total) * 100, (center / total) * 100, (right / total) * 100]
+    return { left, right, totalWidth }
   }, [
     auxMaxWidth,
     auxMinWidth,
     auxOpen,
     auxWidth,
-    shellWidth,
+    shellPanelsWidth,
     sidebarMaxWidth,
     sidebarMinWidth,
     sidebarOpen,
     sidebarWidth,
   ])
+
+  const buildShellLayout = useCallback((): [number, number, number] => {
+    const { left, right, totalWidth } = shellSides
+    const center = Math.max(1, totalWidth - left - right)
+    const total = left + center + right
+
+    return [(left / total) * 100, (center / total) * 100, (right / total) * 100]
+  }, [shellSides])
+
+  // The side panels are sized in px straight through CSS, overriding the
+  // `flex-grow: <percent>` react-resizable-panels writes (a Panel's `style`
+  // prop wins over its computed one), and the center — the only panel left
+  // growing — takes whatever remains. That style is rounded to 3 significant
+  // digits (`toPrecision(3)`, e.g. 20.83% → "20.8"): ~0.5px at 1440px wide, by
+  // an error that changes with every window width, so a sidebar sized through
+  // it wobbled on each resize step however precise the layout fed in. Pinned
+  // in px, a window resize leaves the side columns alone and only the center
+  // flexes. The library's layout is still kept in step (buildShellLayout) — it
+  // drives handle drags and the min/max clamping, and a drag reaches these px
+  // through handleShellLayout → setSidebarWidth / setAuxWidth.
+  const sidebarPanelStyle = useMemo(
+    () => ({ flexGrow: 0, flexShrink: 0, flexBasis: `${shellSides.left}px` }),
+    [shellSides.left]
+  )
+  const auxPanelStyle = useMemo(
+    () => ({ flexGrow: 0, flexShrink: 0, flexBasis: `${shellSides.right}px` }),
+    [shellSides.right]
+  )
 
   const buildMainLayout = useCallback((): [number, number] => {
     if (!terminalOpen) {
@@ -985,10 +1023,10 @@ function FolderWorkspaceShell({ children }: { children: React.ReactNode }) {
         return
       }
 
-      if (shellContainerResizingRef.current || shellWidth <= 0) return
+      if (shellContainerResizingRef.current || shellPanelsWidth <= 0) return
 
       if (sidebarOpen) {
-        const nextSidebarWidth = (normalizedLayout[0] / 100) * shellWidth
+        const nextSidebarWidth = (normalizedLayout[0] / 100) * shellPanelsWidth
         const withinSidebarRange =
           nextSidebarWidth >= sidebarMinWidth - 1 &&
           nextSidebarWidth <= sidebarMaxWidth + 1
@@ -1001,7 +1039,7 @@ function FolderWorkspaceShell({ children }: { children: React.ReactNode }) {
       }
 
       if (auxOpen) {
-        const nextAuxWidth = (normalizedLayout[2] / 100) * shellWidth
+        const nextAuxWidth = (normalizedLayout[2] / 100) * shellPanelsWidth
         const withinAuxRange =
           nextAuxWidth >= auxMinWidth - 1 && nextAuxWidth <= auxMaxWidth + 1
         if (withinAuxRange && Math.abs(nextAuxWidth - auxWidth) >= 1) {
@@ -1017,7 +1055,7 @@ function FolderWorkspaceShell({ children }: { children: React.ReactNode }) {
       auxWidth,
       setAuxWidth,
       setSidebarWidth,
-      shellWidth,
+      shellPanelsWidth,
       sidebarMaxWidth,
       sidebarMinWidth,
       sidebarOpen,
@@ -1067,7 +1105,7 @@ function FolderWorkspaceShell({ children }: { children: React.ReactNode }) {
     ]
   )
 
-  const safeShellWidth = shellWidth > 0 ? shellWidth : 1440
+  const safeShellWidth = shellPanelsWidth > 0 ? shellPanelsWidth : 1440
   const sidebarSizeRange = resolvePanelSizeRange(
     sidebarMinWidth,
     sidebarMaxWidth,
@@ -1102,6 +1140,7 @@ function FolderWorkspaceShell({ children }: { children: React.ReactNode }) {
           id={FOLDER_SHELL_LEFT_PANEL_ID}
           order={1}
           defaultSize={18}
+          style={sidebarPanelStyle}
           minSize={sidebarOpen ? sidebarSizeRange.minSize : 0}
           maxSize={sidebarOpen ? sidebarSizeRange.maxSize : 0}
         >
@@ -1200,6 +1239,7 @@ function FolderWorkspaceShell({ children }: { children: React.ReactNode }) {
           id={FOLDER_SHELL_RIGHT_PANEL_ID}
           order={3}
           defaultSize={18}
+          style={auxPanelStyle}
           minSize={auxOpen ? auxSizeRange.minSize : 0}
           maxSize={auxOpen ? auxSizeRange.maxSize : 0}
         >
